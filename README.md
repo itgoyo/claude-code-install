@@ -30,6 +30,13 @@ curl -fsSL https://raw.githubusercontent.com/itgoyo/claude-code-install/main/cc.
 irm https://ghproxy.net/https://raw.githubusercontent.com/itgoyo/claude-code-install/main/cc.ps1 | iex
 ```
 
+❗️如果闪退可以先输入以下命令：
+```
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+然后输入A回车
+
 备用：
 
 ```powershell
