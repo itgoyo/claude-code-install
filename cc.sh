@@ -18,6 +18,40 @@ echo -e "${CYAN}=== Claude Code 安装程序 ===${NC}"
 echo -e "${GRAY}by itgoyo | https://github.com/itgoyo/claude-code-install${NC}"
 echo ""
 
+clear_dead_local_proxy() {
+    [ -n "${CLAUDE_KEEP_PROXY:-}" ] && return
+
+    local proxy_vars=(http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY)
+    local cleared=()
+    local var value host port
+
+    for var in "${proxy_vars[@]}"; do
+        value="${!var:-}"
+        [ -z "$value" ] && continue
+
+        if [[ "$value" =~ ^(https?|socks4|socks5h?)://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\]|::1):([0-9]+) ]]; then
+            host="${BASH_REMATCH[2]}"
+            port="${BASH_REMATCH[3]}"
+            [ "$host" = "[::1]" ] && host="::1"
+            if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ] || ! bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+                unset "$var"
+                cleared+=("${var}=${value}")
+            fi
+        fi
+    done
+
+    if [ "${#cleared[@]}" -gt 0 ]; then
+        echo -e "${YELLOW}⚠ 检测到本地代理端口未启动，已临时忽略这些代理变量:${NC}"
+        for value in "${cleared[@]}"; do
+            echo -e "${GRAY}  - ${value}${NC}"
+        done
+        echo -e "${GRAY}如需强制保留代理，请先设置 CLAUDE_KEEP_PROXY=1。${NC}"
+        echo ""
+    fi
+}
+
+clear_dead_local_proxy
+
 # 国内 GitHub 加速代理列表（按优先级）
 GH_PROXIES=(
     "https://ghproxy.net"

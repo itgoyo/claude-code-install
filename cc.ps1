@@ -1,210 +1,203 @@
+# Claude Code 一键安装脚本 (Windows PowerShell)
+# 用法:
+#   irm https://raw.githubusercontent.com/itgoyo/claude-code-install/main/cc.ps1 | iex
+
 param(
-    [Parameter(Position=0)]
-    [ValidatePattern('^(stable|latest|\d+\.\d+\.\d+(-[^\s]+)?)$')]
-    [string]$Target = "latest"
+    [string]$Mirror = "auto"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = 'SilentlyContinue'
 
-# Check for 32-bit Windows
-if (-not [Environment]::Is64BitProcess) {
-    Write-Error "Claude Code does not support 32-bit Windows. Please use a 64-bit version of Windows."
-    exit 1
-}
+Write-Host ""
+Write-Host "=== Claude Code 安装程序 ===" -ForegroundColor Cyan
+Write-Host "by itgoyo | https://github.com/itgoyo/claude-code-install" -ForegroundColor DarkGray
+Write-Host ""
 
-$GCS_BUCKET = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
-$DOWNLOAD_DIR = "$env:USERPROFILE\.claude\downloads"
-$INSTALL_BASE = "$env:USERPROFILE\.local\share\claude"
-$VERSIONS_DIR = "$INSTALL_BASE\versions"
-$BIN_DIR = "$env:USERPROFILE\.local\bin"
-$LINK_PATH = "$BIN_DIR\claude.exe"
-$CONFIG_PATH = "$env:USERPROFILE\.claude.json"
-$LOCKS_DIR = "$env:USERPROFILE\.local\state\claude\locks"
-$CACHE_DIR = "$env:USERPROFILE\.cache\claude\staging"
-$DOWNLOADS_DIR = "$env:USERPROFILE\.claude\downloads"
+function Test-LocalPort {
+    param([string]$HostName, [int]$Port)
 
-function Write-Config {
-    param(
-        [string]$ConfigPath,
-        [string]$FirstStartTime
-    )
-
-    $data = @{}
-    if (Test-Path $ConfigPath) {
-        try {
-            $existing = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json -AsHashtable
-            if ($existing) {
-                $data = $existing
-            }
-        }
-        catch {
-            $data = @{}
-        }
-    }
-
-    $data["installMethod"] = "native"
-    $data["autoUpdates"] = $false
-    $data["autoUpdatesProtectedForNative"] = $true
-    if (-not $data.ContainsKey("firstStartTime")) {
-        $data["firstStartTime"] = $FirstStartTime
-    }
-
-    $json = $data | ConvertTo-Json -Depth 10
-    Set-Content -Path $ConfigPath -Value $json -Encoding UTF8
-}
-
-function Get-RemoteText {
-    param(
-        [string]$Url
-    )
-
-    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-        try {
-            $result = & curl.exe -fsSL --ssl-no-revoke --http1.1 --retry 5 --retry-delay 2 $Url
-            if ($LASTEXITCODE -eq 0) {
-                if ($result -is [array]) {
-                    return ($result -join "`n")
-                }
-                return $result
-            }
-            Write-Warning "curl.exe failed with exit code $LASTEXITCODE, falling back to Invoke-RestMethod"
-        }
-        catch {
-            Write-Warning "curl.exe failed: $_. Falling back to Invoke-RestMethod"
-        }
-    }
-
-    return Invoke-RestMethod -Uri $Url -ErrorAction Stop
-}
-
-# Use native ARM64 binary on ARM64 Windows, x64 otherwise
-if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
-    $platform = "win32-arm64"
-} else {
-    $platform = "win32-x64"
-}
-New-Item -ItemType Directory -Force -Path $DOWNLOAD_DIR | Out-Null
-
-# Always download latest version (which has the most up-to-date installer)
-try {
-    $version = (Get-RemoteText -Url "$GCS_BUCKET/latest").ToString().Trim()
-}
-catch {
-    Write-Error "Failed to get latest version: $_"
-    exit 1
-}
-
-try {
-    $manifestText = Get-RemoteText -Url "$GCS_BUCKET/$version/manifest.json"
-    if ($manifestText -is [string]) {
-        $manifest = $manifestText | ConvertFrom-Json
-    }
-    else {
-        $manifest = $manifestText
-    }
-    $checksum = $manifest.platforms.$platform.checksum
-    $expectedSize = $manifest.platforms.$platform.size
-
-    if (-not $checksum) {
-        Write-Error "Platform $platform not found in manifest"
-        exit 1
-    }
-}
-catch {
-    Write-Error "Failed to get manifest: $_"
-    exit 1
-}
-
-# Download and verify
-$binaryPath = "$DOWNLOAD_DIR\claude-$version-$platform.exe"
-$downloadUrl = "$GCS_BUCKET/$version/$platform/claude.exe"
-
-Write-Output "Claude Code version: $version"
-Write-Output "Platform: $platform"
-Write-Output "Download source: $downloadUrl"
-Write-Output "Downloading Claude Code binary..."
-
-try {
-    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-        & curl.exe -fL --ssl-no-revoke --http1.1 --retry 5 --retry-delay 2 -o $binaryPath $downloadUrl
-        if ($LASTEXITCODE -ne 0) {
-            throw "curl.exe failed with exit code $LASTEXITCODE"
-        }
-    }
-    else {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -ErrorAction Stop
-    }
-
-    if ($expectedSize) {
-        $actualSize = (Get-Item -Path $binaryPath).Length
-        if ($actualSize -ne [int64]$expectedSize) {
-            throw "Downloaded file size mismatch. Expected $expectedSize bytes, got $actualSize bytes"
-        }
-    }
-}
-catch {
-    Write-Error "Failed to download binary: $_"
-    if (Test-Path $binaryPath) {
-        Remove-Item -Force $binaryPath
-    }
-    exit 1
-}
-
-# Calculate checksum
-$actualChecksum = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
-
-if ($actualChecksum -ne $checksum) {
-    Write-Error "Checksum verification failed"
-    Remove-Item -Force $binaryPath
-    exit 1
-}
-
-# Install directly without invoking the bundled installer
-Write-Output "Setting up Claude Code..."
-try {
-    New-Item -ItemType Directory -Force -Path $VERSIONS_DIR | Out-Null
-    New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
-    New-Item -ItemType Directory -Force -Path $LOCKS_DIR | Out-Null
-    New-Item -ItemType Directory -Force -Path $CACHE_DIR | Out-Null
-    New-Item -ItemType Directory -Force -Path $DOWNLOADS_DIR | Out-Null
-    New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude\backups" | Out-Null
-
-    $finalPath = "$VERSIONS_DIR\$version.exe"
-    if (Test-Path $finalPath) {
-        Remove-Item -Force $finalPath
-    }
-    Move-Item -Force $binaryPath $finalPath
-    Copy-Item -Force $finalPath $LINK_PATH
-
-    if (Test-Path $CONFIG_PATH) {
-        Copy-Item -Force $CONFIG_PATH "$env:USERPROFILE\.claude\backups\.claude.json.backup.$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())" -ErrorAction SilentlyContinue
-    }
-
-    $firstStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-    Write-Config -ConfigPath $CONFIG_PATH -FirstStartTime $firstStartTime
-
-    Write-Output ""
-    Write-Output "Claude Code successfully installed!"
-    Write-Output ""
-    Write-Output "Version: $version"
-    Write-Output "Location: $LINK_PATH"
-    Write-Output ""
-    Write-Output "PATH target: $BIN_DIR"
-    Write-Output "If claude is not found, add that directory to your user PATH and reopen PowerShell."
-}
-finally {
+    $client = New-Object System.Net.Sockets.TcpClient
     try {
-        if (Test-Path $binaryPath) {
-            Remove-Item -Force $binaryPath
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne(500, $false)) {
+            return $false
         }
-    }
-    catch {
-        Write-Warning "Could not remove temporary file: $binaryPath"
+        $client.EndConnect($async)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
     }
 }
 
-Write-Output ""
-Write-Output "$([char]0x2705) Installation complete!"
-Write-Output ""
+function Clear-DeadLocalProxy {
+    if ([Environment]::GetEnvironmentVariable("CLAUDE_KEEP_PROXY", "Process")) {
+        return
+    }
+
+    $proxyVars = @("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    $cleared = @()
+
+    foreach ($var in $proxyVars) {
+        $value = [Environment]::GetEnvironmentVariable($var, "Process")
+        if (-not $value) { continue }
+
+        if ($value -match "^(?:https?|socks4|socks5h?)://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\]|::1):(\d+)") {
+            $hostName = $Matches[1]
+            if ($hostName -eq "[::1]") { $hostName = "::1" }
+
+            $port = 0
+            $hasValidPort = [int]::TryParse($Matches[2], [ref]$port) -and $port -ge 1 -and $port -le 65535
+            if ((-not $hasValidPort) -or (-not (Test-LocalPort -HostName $hostName -Port $port))) {
+                [Environment]::SetEnvironmentVariable($var, $null, "Process")
+                Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+                $cleared += "${var}=${value}"
+            }
+        }
+    }
+
+    if ($cleared.Count -gt 0) {
+        Write-Host "⚠ 检测到本地代理端口未启动，已临时忽略这些代理变量:" -ForegroundColor Yellow
+        foreach ($item in $cleared) {
+            Write-Host "  - $item" -ForegroundColor DarkGray
+        }
+        Write-Host "如需强制保留代理，请先设置 CLAUDE_KEEP_PROXY=1。" -ForegroundColor DarkGray
+        Write-Host ""
+    }
+}
+
+Clear-DeadLocalProxy
+
+# 测试 URL 是否可达
+function Test-Url {
+    param([string]$Url, [int]$TimeoutSec = 5)
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($Url)
+        $req.Timeout = $TimeoutSec * 1000
+        $req.Method = "HEAD"
+        $resp = $req.GetResponse()
+        $resp.Close()
+        return $true
+    } catch { return $false }
+}
+
+# 检测网络环境
+Write-Host "正在检测网络环境..." -ForegroundColor Cyan
+
+$npmRegistries = @(
+    @{ Key = "official"; Name = "npm 官方源"; Url = "https://registry.npmjs.org" },
+    @{ Key = "npmmirror"; Name = "淘宝 npmmirror"; Url = "https://registry.npmmirror.com" },
+    @{ Key = "huawei"; Name = "华为云 npm"; Url = "https://repo.huaweicloud.com/repository/npm/" },
+    @{ Key = "tencent"; Name = "腾讯云 npm"; Url = "https://mirrors.cloud.tencent.com/npm/" }
+)
+
+function Get-NpmRegistryCandidates {
+    param([string]$MirrorName)
+
+    $official = @($npmRegistries | Where-Object { $_["Key"] -eq "official" })
+    $domestic = @($npmRegistries | Where-Object { $_["Key"] -ne "official" })
+
+    if ($MirrorName -and $MirrorName -ne "auto") {
+        $selected = @($npmRegistries | Where-Object {
+            $_["Key"] -eq $MirrorName -or $_["Url"].TrimEnd("/") -eq $MirrorName.TrimEnd("/")
+        })
+
+        if ($selected.Count -eq 0 -and $MirrorName -match "^https?://") {
+            $selected = @(@{ Key = "custom"; Name = "自定义镜像"; Url = $MirrorName })
+        }
+
+        if ($selected.Count -gt 0) {
+            $remaining = @($npmRegistries | Where-Object { $_["Url"].TrimEnd("/") -ne $selected[0]["Url"].TrimEnd("/") })
+            return @($selected[0]) + $remaining
+        }
+
+        Write-Host "⚠ 未识别镜像 '$MirrorName'，使用自动模式。" -ForegroundColor Yellow
+    }
+
+    if (Test-Url "https://registry.npmjs.org" -TimeoutSec 5) {
+        Write-Host "✓ npm: 官方源可用，失败时自动切换国内镜像" -ForegroundColor Green
+        return $official + $domestic
+    }
+
+    Write-Host "✓ npm: 官方源不可用，优先使用国内镜像" -ForegroundColor Yellow
+    return $domestic + $official
+}
+
+$registryCandidates = Get-NpmRegistryCandidates -MirrorName $Mirror
+
+Write-Host ""
+
+# 检查 Node.js
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host "✗ 未检测到 Node.js" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "请先安装 Node.js: https://nodejs.org" -ForegroundColor Yellow
+    Write-Host "安装后重新运行此脚本。"
+    exit 1
+}
+
+$nodeVersion = (node --version)
+Write-Host "✓ Node.js $nodeVersion" -ForegroundColor Green
+
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Host "✗ 未检测到 npm" -ForegroundColor Red
+    Write-Host "请修复 Node.js/npm 安装后重新运行此脚本。" -ForegroundColor Yellow
+    exit 1
+}
+
+$npmVersion = (npm --version)
+Write-Host "✓ npm $npmVersion" -ForegroundColor Green
+
+# 安装 Claude Code（主源 + 自动 fallback）
+Write-Host "正在安装 Claude Code..." -ForegroundColor Cyan
+Write-Host "候选 npm registry:" -ForegroundColor DarkGray
+foreach ($registry in $registryCandidates) {
+    $candidateName = $registry["Name"]
+    $candidateUrl = $registry["Url"]
+    Write-Host "  - ${candidateName}: ${candidateUrl}" -ForegroundColor DarkGray
+}
+Write-Host ""
+
+$installed = $false
+
+foreach ($registry in $registryCandidates) {
+    $registryName = $registry["Name"]
+    $registryUrl = $registry["Url"]
+    $installError = $null
+    Write-Host "尝试使用 $registryName..." -ForegroundColor Cyan
+
+    try {
+        & npm install -g @anthropic-ai/claude-code --registry $registryUrl
+        if ($LASTEXITCODE -eq 0) {
+            $installed = $true
+            break
+        }
+    } catch {
+        $installError = $_.Exception.Message
+    }
+
+    if ($installError) {
+        Write-Host "$registryName 安装出错: $installError" -ForegroundColor Yellow
+    } else {
+        Write-Host "$registryName 安装失败。" -ForegroundColor Yellow
+    }
+}
+
+if (-not $installed) {
+    Write-Host "所有 npm registry 都安装失败，请检查网络、Node.js/npm 配置后重试。" -ForegroundColor Red
+    exit 1
+}
+
+# 验证安装
+if (Get-Command claude -ErrorAction SilentlyContinue) {
+    $claudeVersion = try { claude --version 2>$null } catch { "已安装" }
+    Write-Host ""
+    Write-Host "✓ Claude Code 安装成功！版本: $claudeVersion" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "运行 'claude' 开始使用。" -ForegroundColor Cyan
+} else {
+    Write-Host "⚠ 已安装，但 'claude' 命令未找到，请重启终端后重试。" -ForegroundColor Yellow
+}
