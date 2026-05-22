@@ -62,8 +62,9 @@ curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/itgoyo/claude-co
 
 ## 功能特性
 
-- ✅ 自动检测网络，国内自动切换淘宝 npm 镜像
-- ✅ npm 安装失败自动 fallback 备用源
+- ✅ 自动检测网络，官方源不可用时优先使用国内 npm 镜像
+- ✅ npm 安装失败自动 fallback 多个备用源
+- ✅ 内置 npm 官方源、淘宝 npmmirror、华为云 npm、腾讯云 npm
 - ✅ 检查 Node.js 是否已安装
 - ✅ 安装后自动验证
 

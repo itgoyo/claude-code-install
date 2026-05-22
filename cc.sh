@@ -32,6 +32,14 @@ can_reach_github() {
     curl -fsSL --connect-timeout 4 --max-time 6 "https://raw.githubusercontent.com" > /dev/null 2>&1
 }
 
+# npm registry 列表：key|name|url
+NPM_REGISTRIES=(
+    "official|npm 官方源|https://registry.npmjs.org"
+    "npmmirror|淘宝 npmmirror|https://registry.npmmirror.com"
+    "huawei|华为云 npm|https://repo.huaweicloud.com/repository/npm/"
+    "tencent|腾讯云 npm|https://mirrors.cloud.tencent.com/npm/"
+)
+
 # 检测能否直连 npmjs 官方源
 can_reach_npm() {
     curl -fsSL --connect-timeout 4 --max-time 6 "https://registry.npmjs.org" > /dev/null 2>&1
@@ -45,12 +53,14 @@ test_proxy() {
 
 echo -e "${CYAN}正在检测网络环境...${NC}"
 
+NPM_REGISTRY_CANDIDATES=()
+
 if can_reach_npm; then
-    NPM_REGISTRY="https://registry.npmjs.org"
-    echo -e "${GREEN}✓ npm: 官方源可用${NC}"
+    echo -e "${GREEN}✓ npm: 官方源可用，失败时自动切换国内镜像${NC}"
+    NPM_REGISTRY_CANDIDATES=("${NPM_REGISTRIES[@]}")
 else
-    NPM_REGISTRY="https://registry.npmmirror.com"
-    echo -e "${YELLOW}✓ npm: 切换淘宝镜像 (npmmirror.com)${NC}"
+    echo -e "${YELLOW}✓ npm: 官方源不可用，优先使用国内镜像${NC}"
+    NPM_REGISTRY_CANDIDATES=("${NPM_REGISTRIES[@]:1}" "${NPM_REGISTRIES[0]}")
 fi
 
 echo ""
@@ -73,22 +83,41 @@ fi
 NODE_VERSION=$(node --version)
 echo -e "${GREEN}✓ Node.js ${NODE_VERSION}${NC}"
 
+if ! command -v npm &>/dev/null; then
+    echo -e "${RED}✗ 未检测到 npm${NC}"
+    echo -e "${YELLOW}请修复 Node.js/npm 安装后重新运行此脚本。${NC}"
+    exit 1
+fi
+
+NPM_VERSION=$(npm --version)
+echo -e "${GREEN}✓ npm ${NPM_VERSION}${NC}"
+
 # 安装 Claude Code
 echo -e "${CYAN}正在安装 Claude Code...${NC}"
-echo -e "${GRAY}npm registry: ${NPM_REGISTRY}${NC}"
+echo -e "${GRAY}候选 npm registry:${NC}"
+for registry in "${NPM_REGISTRY_CANDIDATES[@]}"; do
+    IFS='|' read -r _ registry_name registry_url <<< "$registry"
+    echo -e "${GRAY}  - ${registry_name}: ${registry_url}${NC}"
+done
 echo ""
 
-if npm install -g @anthropic-ai/claude-code --registry "$NPM_REGISTRY"; then
-    :
-else
-    # 主源失败，切换备用
-    if [ "$NPM_REGISTRY" = "https://registry.npmjs.org" ]; then
-        echo -e "${YELLOW}官方源失败，切换淘宝镜像重试...${NC}"
-        npm install -g @anthropic-ai/claude-code --registry "https://registry.npmmirror.com"
-    else
-        echo -e "${RED}安装失败，请检查网络后重试。${NC}"
-        exit 1
+INSTALLED=0
+
+for registry in "${NPM_REGISTRY_CANDIDATES[@]}"; do
+    IFS='|' read -r _ registry_name registry_url <<< "$registry"
+    echo -e "${CYAN}尝试使用 ${registry_name}...${NC}"
+
+    if npm install -g @anthropic-ai/claude-code --registry "$registry_url"; then
+        INSTALLED=1
+        break
     fi
+
+    echo -e "${YELLOW}${registry_name} 安装失败。${NC}"
+done
+
+if [ "$INSTALLED" -ne 1 ]; then
+    echo -e "${RED}所有 npm registry 都安装失败，请检查网络、Node.js/npm 配置后重试。${NC}"
+    exit 1
 fi
 
 # 验证安装

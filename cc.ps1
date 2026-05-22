@@ -31,13 +31,46 @@ function Test-Url {
 # 检测网络环境
 Write-Host "正在检测网络环境..." -ForegroundColor Cyan
 
-if (Test-Url "https://registry.npmjs.org" -TimeoutSec 5) {
-    $NPM_REGISTRY = "https://registry.npmjs.org"
-    Write-Host "✓ npm: 官方源可用" -ForegroundColor Green
-} else {
-    $NPM_REGISTRY = "https://registry.npmmirror.com"
-    Write-Host "✓ npm: 切换淘宝镜像 (npmmirror.com)" -ForegroundColor Yellow
+$npmRegistries = @(
+    @{ Key = "official"; Name = "npm 官方源"; Url = "https://registry.npmjs.org" },
+    @{ Key = "npmmirror"; Name = "淘宝 npmmirror"; Url = "https://registry.npmmirror.com" },
+    @{ Key = "huawei"; Name = "华为云 npm"; Url = "https://repo.huaweicloud.com/repository/npm/" },
+    @{ Key = "tencent"; Name = "腾讯云 npm"; Url = "https://mirrors.cloud.tencent.com/npm/" }
+)
+
+function Get-NpmRegistryCandidates {
+    param([string]$MirrorName)
+
+    $official = @($npmRegistries | Where-Object { $_["Key"] -eq "official" })
+    $domestic = @($npmRegistries | Where-Object { $_["Key"] -ne "official" })
+
+    if ($MirrorName -and $MirrorName -ne "auto") {
+        $selected = @($npmRegistries | Where-Object {
+            $_["Key"] -eq $MirrorName -or $_["Url"].TrimEnd("/") -eq $MirrorName.TrimEnd("/")
+        })
+
+        if ($selected.Count -eq 0 -and $MirrorName -match "^https?://") {
+            $selected = @(@{ Key = "custom"; Name = "自定义镜像"; Url = $MirrorName })
+        }
+
+        if ($selected.Count -gt 0) {
+            $remaining = @($npmRegistries | Where-Object { $_["Url"].TrimEnd("/") -ne $selected[0]["Url"].TrimEnd("/") })
+            return @($selected[0]) + $remaining
+        }
+
+        Write-Host "⚠ 未识别镜像 '$MirrorName'，使用自动模式。" -ForegroundColor Yellow
+    }
+
+    if (Test-Url "https://registry.npmjs.org" -TimeoutSec 5) {
+        Write-Host "✓ npm: 官方源可用，失败时自动切换国内镜像" -ForegroundColor Green
+        return $official + $domestic
+    }
+
+    Write-Host "✓ npm: 官方源不可用，优先使用国内镜像" -ForegroundColor Yellow
+    return $domestic + $official
 }
+
+$registryCandidates = Get-NpmRegistryCandidates -MirrorName $Mirror
 
 Write-Host ""
 
@@ -53,31 +86,52 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 $nodeVersion = (node --version)
 Write-Host "✓ Node.js $nodeVersion" -ForegroundColor Green
 
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Host "✗ 未检测到 npm" -ForegroundColor Red
+    Write-Host "请修复 Node.js/npm 安装后重新运行此脚本。" -ForegroundColor Yellow
+    exit 1
+}
+
+$npmVersion = (npm --version)
+Write-Host "✓ npm $npmVersion" -ForegroundColor Green
+
 # 安装 Claude Code（主源 + 自动 fallback）
 Write-Host "正在安装 Claude Code..." -ForegroundColor Cyan
-Write-Host "npm registry: $NPM_REGISTRY" -ForegroundColor DarkGray
+Write-Host "候选 npm registry:" -ForegroundColor DarkGray
+foreach ($registry in $registryCandidates) {
+    $candidateName = $registry["Name"]
+    $candidateUrl = $registry["Url"]
+    Write-Host "  - ${candidateName}: ${candidateUrl}" -ForegroundColor DarkGray
+}
 Write-Host ""
 
 $installed = $false
 
-try {
-    & npm install -g @anthropic-ai/claude-code --registry $NPM_REGISTRY
-    if ($LASTEXITCODE -eq 0) { $installed = $true }
-} catch { }
+foreach ($registry in $registryCandidates) {
+    $registryName = $registry["Name"]
+    $registryUrl = $registry["Url"]
+    $installError = $null
+    Write-Host "尝试使用 $registryName..." -ForegroundColor Cyan
 
-# 主源失败则切换备用
-if (-not $installed) {
-    if ($NPM_REGISTRY -eq "https://registry.npmjs.org") {
-        Write-Host "官方源失败，切换淘宝镜像重试..." -ForegroundColor Yellow
-        try {
-            & npm install -g @anthropic-ai/claude-code --registry "https://registry.npmmirror.com"
-            if ($LASTEXITCODE -eq 0) { $installed = $true }
-        } catch { }
+    try {
+        & npm install -g @anthropic-ai/claude-code --registry $registryUrl
+        if ($LASTEXITCODE -eq 0) {
+            $installed = $true
+            break
+        }
+    } catch {
+        $installError = $_.Exception.Message
+    }
+
+    if ($installError) {
+        Write-Host "$registryName 安装出错: $installError" -ForegroundColor Yellow
+    } else {
+        Write-Host "$registryName 安装失败。" -ForegroundColor Yellow
     }
 }
 
 if (-not $installed) {
-    Write-Host "安装失败，请检查网络后重试。" -ForegroundColor Red
+    Write-Host "所有 npm registry 都安装失败，请检查网络、Node.js/npm 配置后重试。" -ForegroundColor Red
     exit 1
 }
 
