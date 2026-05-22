@@ -35,6 +35,9 @@ irm https://ghproxy.net/https://raw.githubusercontent.com/itgoyo/claude-code-ins
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
+<img width="1265" height="840" alt="image" src="https://github.com/user-attachments/assets/3209c596-f417-4ff0-a03d-8270ab1f8242" />
+
+
 然后输入A回车
 
 备用：
