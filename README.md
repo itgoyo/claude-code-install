@@ -26,6 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/itgoyo/claude-code-install/main/cc.
 
 ### Windows
 
+❗️先安装基础软件git、nodejs、cc-switch❗️
+
+https://wwamh.lanzoum.com/b0hdxu09i
+密码:6dx9
+
 ```powershell
 irm https://ghproxy.net/https://raw.githubusercontent.com/itgoyo/claude-code-install/main/cc.ps1 | iex
 ```
